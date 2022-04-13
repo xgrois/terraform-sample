@@ -499,3 +499,13 @@ Now, commit and push to Git/GitHub and the Azure DevOps Pipeline will do all the
 
 Once pipeline has succeeded, you can query the public API endpoint for weatherforecast and should be operative.
 Note that any code changes in your API will trigger AzureDevOps pipeline again, so in few minutes your real API will be redeployed and updated!
+
+## Destroy
+
+To destroy Azure resources, in your project's terminal:
+
+```
+terraform destroy
+```
+
+> Note: if you commit new code to GitHub, the pipeline will create the cloud resources again.

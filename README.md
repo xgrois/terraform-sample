@@ -1,5 +1,7 @@
 # Azure DevOps and Terraform
 
+[DevOps Pipeline to build](Capture.JPG)
+
 You need:
 
 -   .NET

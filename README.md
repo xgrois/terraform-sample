@@ -175,7 +175,20 @@ Mark "Grant access permission to all pipelines" and Save.
 Add a new service connection. Azure Service Manager -> Service pricipal -> Subscription with Service connection name e.g., xgrois Azure Resource Manager.
 Mark "grant access permission to all pipelines" and Save.
 
-Now, go to Pipelines -> Create Pipeline -> GitHub (give permissions when asked).
+> Note: now Azure DevOps has full access to deploy on your Azure Cloud
+
+### Pipelines
+
+> Note: Pipelines are equivalent to GitHub Actions
+
+Pipelines will (every time you push a change in you GitHub repo):
+
+-   Take the repo in GitHub you want
+-   Perform any action (or sequential actions) with it. e.g. in our case:
+    -   Create a Docker image and publish it to DockerHub
+    -   Pick that image and perform a deployment to Azure cloud following Terraform instructions
+
+Go to Pipelines -> Create Pipeline -> GitHub (give permissions when asked).
 
 Select your repo (accept permissions).
 

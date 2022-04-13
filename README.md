@@ -95,6 +95,11 @@ resource "azurerm_resource_group" "tf_test" {
   location = "West Europe"
 }
 
+variable "imagebuild" {
+  type = string
+  default = ""
+  description = "docker image tag"
+}
 resource "azurerm_container_group" "tfcg_test" {
   name = "weatherapi"
   location = azurerm_resource_group.tf_test.location
@@ -106,7 +111,7 @@ resource "azurerm_container_group" "tfcg_test" {
 
   container {
     name = "weatherapi"
-    image = "xgrois/weatherapi"
+    image = "xgrois/weatherapi:${var.imagebuild}"
     cpu = "1"
     memory = "1"
     ports {
@@ -369,15 +374,128 @@ stages:
                       ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
                       ARM_TENANT_ID: $(ARM_TENANT_ID)
                       ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+                      TF_VAR_imagebuild: $(tag)
 ```
 
-You can now delete next files in your repo: `terraform.tfstate` and `terraform.tfstate.backup`
-Not needed anymore because we are using a "terraform backend" for those files.
+## Try it from "scratch"
 
-Actually, you can remove all except `main.tf` since we are now initiating all again.
+Delete DockerHub repo with the weatherapi image.
 
-In terminal, type:
+Go to Azure cloud and delete (you can do terraform destroy BUT in case you have any issue):
 
-```console
-terraform init
+-   Resource Group: tf-test-rg
+-   Container Instance: weatherapi
+
+In your project's directory, remove all terraform files except `main.tf` since we are now initiating all again.
+Make sure it looks like below:
+
 ```
+provider "azurerm" {
+    features {
+
+    }
+}
+
+terraform {
+  backend "azurerm" {
+    resource_group_name = "tf_storage_rg"
+    storage_account_name = "xgroistfstorageacc"
+    container_name = "tfstate"
+    key = "terraform.tfstate"
+  }
+}
+
+resource "azurerm_resource_group" "tf_test" {
+  name = "tf-test-rg"
+  location = "West Europe"
+}
+
+variable "imagebuild" {
+  type = string
+  default = ""
+  description = "docker image tag"
+}
+resource "azurerm_container_group" "tfcg_test" {
+  name = "weatherapi"
+  location = azurerm_resource_group.tf_test.location
+  resource_group_name = azurerm_resource_group.tf_test.name
+
+  ip_address_type = "Public"
+  dns_name_label = "xgroisweatherapi"
+  os_type = "Linux"
+
+  container {
+    name = "weatherapi"
+    image = "xgrois/weatherapi:${var.imagebuild}"
+    cpu = "1"
+    memory = "1"
+    ports {
+      port = 80
+      protocol = "TCP"
+    }
+  }
+}
+```
+
+Make sure the `azure-pipeline.yml` looks like:
+
+```
+trigger:
+    - master
+
+resources:
+    - repo: self
+
+variables:
+    tag: "$(Build.BuildId)"
+
+stages:
+    - stage: Build
+      displayName: Build image
+      jobs:
+          - job: Build
+            displayName: Build
+            pool:
+                vmImage: ubuntu-latest
+            steps:
+                # Docker
+                - task: Docker@2
+                  inputs:
+                      containerRegistry: "xgrois Docker Hub"
+                      repository: "xgrois/weatherapi"
+                      command: "buildAndPush"
+                      Dockerfile: "**/Dockerfile"
+                      tags: |
+                          $(tag)
+    - stage: Provision
+      displayName: Deploy to Azure using Terraform
+      dependsOn: Build
+      jobs:
+          - job: Provision
+            displayName: Provision Container Instance
+            pool:
+                vmImage: ubuntu-latest
+            variables:
+                - group: Terraform Service Principal Vars
+            steps:
+                - script: |
+                      set -e
+
+                      terraform init -input=false
+                      terraform apply -input=false -auto-approve
+                  name: runTerraform
+                  displayName: Run Terraform
+                  env:
+                      ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+                      ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+                      ARM_TENANT_ID: $(ARM_TENANT_ID)
+                      ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+                      TF_VAR_imagebuild: $(tag)
+```
+
+Now, commit and push to Git/GitHub and the Azure DevOps Pipeline will do all the magic.
+
+> Note: the first time you will see an error when initiating the Terraform stage. Azure DevOps will ask you for giving Terra access to the secret variables group (with Azure credentials) to deploy on Azure cloud. Give it permissions and the pipeline process will continue.
+
+Once pipeline has succeeded, you can query the public API endpoint for weatherforecast and should be operative.
+Note that any code changes in your API will trigger AzureDevOps pipeline again, so in few minutes your real API will be redeployed and updated!

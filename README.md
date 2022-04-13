@@ -63,6 +63,8 @@ Now, create the local repo and then the remote in GitHub.
 
 ## Terraform time
 
+> Note: take care of exe file when using terraform CLI since GitHub will complain about the size. You can add it to `.gitignore`.
+
 Create a new file `main.tf` with below content:
 
 ```
@@ -127,6 +129,14 @@ You can try the API in your browser:
 
 ## Time to automate all previous steps
 
+> Note: you can safely use terraform CLI from your desktop computer since you are already logged in Azure (`az login`)
+
+> Note: however, if you want to include Terraform in Azure DevOps, you will need the credentials in this section,
+> so Azure DevOps can use terraform and terraform can deploy to your Azure cloud.
+
+> Note: you can safely use credentials in your DevOps account, but take care of them and not use them anywhere else. Do not add those in code or documentation.
+> Otherwise, a bad person (yes, a bad person) might see them in your GitHub repo, and use your Azure cloud account for some self-satisfaction
+
 We need the next Service Principal Environment Variables (**DO NOT SHARE THESE NEVER**):
 
 -   ARM_CLIENT_ID
@@ -188,9 +198,13 @@ Pipelines will (every time you push a change in you GitHub repo):
     -   Create a Docker image and publish it to DockerHub
     -   Pick that image and perform a deployment to Azure cloud following Terraform instructions
 
+#### 1 Give access to your GitHub repo
+
 Go to Pipelines -> Create Pipeline -> GitHub (give permissions when asked).
 
 Select your repo (accept permissions).
+
+#### 2 Define the 1st action: Create a Docker image and push it to your DockerHub
 
 Select Docker -> Validate and configure. In the YAML, click "Show assistant" and type docker, select Docker. In options, set your DockerHub as container registry,
 type your docker repo name `xgrois/weatherapi` and leave other defaults. Add.
@@ -230,3 +244,140 @@ stages:
 ```
 
 Save and run.
+
+> Note: this will add this YAML file to your GitHub repo. AzureDevOps will automatically run the pipeline. So, if everything is OK, you will see a new docker image in your DockerHub
+
+> Note: every new commit and push to GitHub for this repo will trigger the pipeline. You can see that viewing the tags of the docker image in DockerHub. Now, you start to see the power of pipelines that can automate a lot of things everytime you update your code base.
+
+#### 2 Define the 2nd action: Use Terraform to deploy the container in Azure cloud
+
+Terraform can be used in Azure DevOps to deploy your stuff to Azure cloud.
+However, Terraform will need appropriate credentials to do that.
+Here is how we configure them.
+
+In Pipelines section, go to Library and add a Variable group:
+
+-   Name: Terraform Service Principal Vars (any name you like)
+-   Description: any you want
+-   Allow access to all pipelines (yes)
+-   Link secrets from an Azure
+-   Add a new variable (you can add the padlock to all if you want):
+    -   Name: ARM_CLIENT_ID
+    -   Value: your mega secret code
+-   Add a new variable:
+    -   Name: ARM_CLIENT_SECRET
+    -   Value: your mega secret code
+-   Add a new variable:
+    -   Name: ARM_TENANT_ID
+    -   Value: your mega secret code
+-   Add a new variable:
+    -   Name: ARM_SUBSCRIPTION_ID
+    -   Value: your mega secret code
+
+Each time Azure DevOps runs the Pipeline, a new context for Terraform is created. This means that the file `terraform.tfstate` will not persist.
+Since this file is "the git file for Terraform" to keep tracking terra-code to azure-resources, we need a way to persist the file.
+We will do what Terraform suggests to do so, what it is called the "backend".
+
+Go to Azure cloud:
+
+-   Add a new Resource Group
+    -   Name: what you want, e.g. "tf_storage_rg"
+    -   Location: your typical one
+    -   Review and Create
+
+Create a Storage Account (blob)
+
+-   Use the previous rg
+-   Use any name you want (must be unique globally...), xgroistfstorageacc
+-   Use typical location
+-   Use LRS for replication (the most basic one)
+-   Use Cool as Access Tier
+-   Leave defaults for other
+
+In the new Blob service, go to Containers, and create a new one:
+
+-   Name: anything you like, tfstate
+-   Private
+
+Now, in `main.tf` file add next below provider entry:
+
+```
+...
+terraform {
+  backend "azurerm" {
+    resource_group_name = "tf_storage_rg"
+    storage_account_name = "xgroistfstorageacc"
+    container_name = "tfstate"
+    key = "terraform.tfstate"
+  }
+}
+...
+```
+
+Note how Terraform understands that it will need to take the `terraform.state` file from that azure location and now creating a new one.
+
+Now, let's add Terraform to our DevOps pipeline. Update your `azure-pipelines.yml` file as below:
+
+```
+trigger:
+    - master
+
+resources:
+    - repo: self
+
+variables:
+    tag: "$(Build.BuildId)"
+
+stages:
+    - stage: Build
+      displayName: Build image
+      jobs:
+          - job: Build
+            displayName: Build
+            pool:
+                vmImage: ubuntu-latest
+            steps:
+                # Docker
+                - task: Docker@2
+                  inputs:
+                      containerRegistry: "xgrois Docker Hub"
+                      repository: "xgrois/weatherapi"
+                      command: "buildAndPush"
+                      Dockerfile: "**/Dockerfile"
+                      tags: |
+                          $(tag)
+    - stage: Provision
+      displayName: Deploy to Azure using Terraform
+      dependsOn: Build
+      jobs:
+          - job: Provision
+            displayName: Provision Container Instance
+            pool:
+                vmImage: ubuntu-latest
+            variables:
+                - group: Terraform Service Principal Vars
+            steps:
+                - script: |
+                      set -e
+
+                      terraform init -input=false
+                      terraform apply -input=false -auto-approve
+                  name: runTerraform
+                  displayName: Run Terraform
+                  env:
+                      ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+                      ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+                      ARM_TENANT_ID: $(ARM_TENANT_ID)
+                      ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+```
+
+You can now delete next files in your repo: `terraform.tfstate` and `terraform.tfstate.backup`
+Not needed anymore because we are using a "terraform backend" for those files.
+
+Actually, you can remove all except `main.tf` since we are now initiating all again.
+
+In terminal, type:
+
+```console
+terraform init
+```
